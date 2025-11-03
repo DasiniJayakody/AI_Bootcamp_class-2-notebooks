@@ -16,8 +16,16 @@ Guidance
 - No extra prose around JSON.
 """
 
+import os
 from typing import List
 from enum import Enum
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from dotenv import load_dotenv
+load_dotenv()
+print("Loaded key:", os.getenv("OPENAI_API_KEY")) #If there is an error : run -> Remove-Item Env:\OPENAI_API_KEY
+
 
 # TODO: import ChatOpenAI, ChatPromptTemplate, StrOutputParser
 # from langchain_openai import ChatOpenAI
@@ -36,11 +44,14 @@ class EmergencyDispatcher:
     """Minimal triage assistant driven by a single LangChain pipeline."""
 
     def __init__(
-        self, model_name: str = "gpt-4o-mini", temperature: float = 0.1
+        self, model_name: str = "gpt-4o-mini", temperature: float = 1.0
     ) -> None:
         # TODO: initialize a ChatOpenAI LLM configured with provided model and temperature
-        # self.llm = ChatOpenAI(model=model_name, temperature=temperature)
-        self.llm = None
+        self.llm = ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            api_key=os.getenv("OPENAI_API_KEY"),
+        )
 
     def build_prompt(self):
         """Return a ChatPromptTemplate defining system+user roles.
@@ -55,12 +66,22 @@ class EmergencyDispatcher:
           UNKNOWN if insufficient detail.
         """
 
-        # Example scaffold (uncomment and replace ...):
-        # prompt = ChatPromptTemplate.from_messages([
-        #     ("system", "You are a precise dispatcher. Output compact JSON only: {\\"priority\\": \\\"...\\\", \\"reason\\\": \\\"...\\\"}."),
-        #     ("user", "Classify this caller message: {message}"),
-        # ])
-        prompt = None
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are a precise emergency dispatcher assistant. "
+                    "Classify the caller message and output JSON only in this format: "
+                    '{{"priority": "<LIFE_THREATENING|URGENT|NON_URGENT|UNKNOWN>", "reason": "<one-line reason>"}}. '
+                    "Use these rules: "
+                    "LIFE_THREATENING (e.g., not breathing, severe bleeding), "
+                    "URGENT (e.g., injury needing care soon), "
+                    "NON_URGENT (e.g., minor issue, complaint), "
+                    "UNKNOWN if unclear.",
+                ),
+                ("user", "Caller message: {message}"),
+            ]
+        )
         return prompt
 
     def triage(self, message: str) -> str:
@@ -72,10 +93,9 @@ class EmergencyDispatcher:
         - Return the resulting JSON string (do not prettify)
         """
 
-        # prompt = self.build_prompt()
-        # chain = prompt | self.llm | StrOutputParser()
-        # return chain.invoke({"message": message})
-        return '{"priority": "UNKNOWN", "reason": "TODO: implement"}'
+        prompt = self.build_prompt()
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({"message": message})
 
 
 def sample_calls() -> List[str]:
