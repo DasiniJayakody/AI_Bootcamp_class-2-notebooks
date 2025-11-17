@@ -1,21 +1,22 @@
 """
 Assignment 2: AI Food Safety Inspector
-Zero-Shot Prompting with Structured Outputs
-
-Your mission: Analyze restaurant reviews and complaints to detect health violations
-using only clear instructions — no training examples needed!
 """
 
 import json
-from typing import Dict, List, Optional, Tuple
+import os
+from typing import Dict, List, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-# TODO: Uncomment real imports when implementing
-# from langchain_openai import ChatOpenAI
-# from langchain_core.prompts import PromptTemplate
-# from langchain_core.output_parsers import StrOutputParser
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
+load_dotenv()
+
+
+# ENUMS ---------------------------------------------------------
 
 class ViolationCategory(Enum):
     TEMPERATURE_CONTROL = "Food Temperature Control"
@@ -40,10 +41,10 @@ class InspectionPriority(Enum):
     LOW = "LOW"
 
 
+# DATA CLASSES --------------------------------------------------
+
 @dataclass
 class Violation:
-    """Structured violation data"""
-
     category: str
     description: str
     severity: str
@@ -53,8 +54,6 @@ class Violation:
 
 @dataclass
 class InspectionReport:
-    """Complete inspection analysis"""
-
     restaurant_name: str
     overall_risk_score: int
     violations: List[Violation]
@@ -63,166 +62,164 @@ class InspectionReport:
     follow_up_required: bool
 
 
-class FoodSafetyInspector:
-    """
-    AI-powered food safety analyzer using zero-shot structured prompting.
-    """
+# MAIN CLASS -----------------------------------------------------
 
-    def __init__(self, model_name: str = "gpt-4o-mini", temperature: float = 0.1):
-        """Initialize with LLM for consistent violation detection."""
-        # TODO: Replace with a real LLM once ready
-        # self.llm = ChatOpenAI(model=model_name, temperature=temperature)
-        self.llm = None
-        self.analysis_chain = None
-        self.risk_chain = None
+class FoodSafetyInspector:
+
+    def __init__(self, model_name="gpt-4o-mini", temperature=0.1):
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("ERROR: OPENAI_API_KEY not set in .env!")
+
+        self.llm = ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
         self._setup_chains()
 
-    def _setup_chains(self) -> None:
-        """
-        TODO #1: Create zero-shot prompts for violation detection and risk assessment.
+    # ------------------------------------------------------------
 
-        Create TWO chains:
-        1. analysis_chain: Detects violations and extracts evidence
-        2. risk_chain: Calculates risk scores based on violations
+    def _setup_chains(self):
 
-        Requirements:
-        - Must output valid JSON
-        - Include all violation categories
-        - Extract specific evidence quotes
-        - Generate confidence scores
-        """
+        # ANALYSIS PROMPT
+        analysis_template = PromptTemplate.from_template("""
+You are an AI Food Safety Inspector.
+Extract ALL health violations.
 
-        # TODO: Create violation detection prompt
-        # analysis_template = PromptTemplate.from_template(
-        #     """You are a food safety inspector AI. Analyze the following text for health code violations.
-        # [Instructions here]
-        # Text to analyze: {review_text}
-        # Output JSON:"""
-        # )
+STRICT JSON OUTPUT:
 
-        # TODO: Create risk assessment prompt
-        # risk_template = PromptTemplate.from_template(
-        #     """Based on these violations, calculate an overall risk score (0-100).
-        # [Scoring criteria here]
-        # Violations: {violations}
-        # Risk Assessment:"""
-        # )
+{{
+  "violations": [
+    {{
+      "category": "string",
+      "description": "string",
+      "severity": "Critical|High|Medium|Low",
+      "evidence": "exact snippet",
+      "confidence": 0.0
+    }}
+  ]
+}}
 
-        # TODO: Set up the chains using LCEL
-        self.analysis_chain = None
-        self.risk_chain = None
+If no violations, return {{"violations":[]}}.
+
+Review text:
+{review_text}
+
+JSON ONLY:
+""")
+
+        self.analysis_chain = analysis_template | self.llm | StrOutputParser()
+
+        # RISK PROMPT
+        risk_template = PromptTemplate.from_template("""
+You are a food safety risk scoring AI.
+
+Violations:
+{violations}
+
+Compute score:
+Critical=30, High=20, Medium=10, Low=5
+If pests or raw meat → +20 bonus
+
+Priority:
+>=70 URGENT
+>=40 HIGH
+else ROUTINE
+
+Return JSON ONLY:
+{{
+  "risk_score": <int>,
+  "priority": "<string>"
+}}
+""")
+
+        self.risk_chain = risk_template | self.llm | StrOutputParser()
+
+    # ------------------------------------------------------------
 
     def detect_violations(self, text: str) -> List[Violation]:
-        """
-        TODO #2: Detect health violations from text input.
-
-        Args:
-            text: Review, complaint, or social media post
-
-        Returns:
-            List of Violation objects with evidence
-        """
-
+        """Run the LLM and parse violations."""
         try:
-            # TODO: Use analysis_chain to detect violations and parse JSON
-            # raw = self.analysis_chain.invoke({"review_text": text})
-            # data = json.loads(raw)
-            data = {"violations": []}
-            return [
-                Violation(
-                    category=v.get("category", ViolationCategory.UNKNOWN.value),
-                    description=v.get("description", ""),
-                    severity=v.get("severity", SeverityLevel.LOW.value),
-                    evidence=v.get("evidence", ""),
-                    confidence=float(v.get("confidence", 0.0)),
+            raw = self.analysis_chain.invoke({"review_text": text})
+            data = json.loads(raw)
+
+            violations = []
+            for v in data.get("violations", []):
+                violations.append(
+                    Violation(
+                        category=v.get("category", "Unknown"),
+                        description=v.get("description", ""),
+                        severity=v.get("severity", "Low"),
+                        evidence=v.get("evidence", ""),
+                        confidence=float(v.get("confidence", 0.0)),
+                    )
                 )
-                for v in data.get("violations", [])
-            ]
+            return violations
+
         except Exception as e:
-            print(f"Error detecting violations: {e}")
+            print("Violation detection error:", e)
             return []
 
+    # ------------------------------------------------------------
+
     def calculate_risk_score(self, violations: List[Violation]) -> Tuple[int, str]:
-        """
-        TODO #3: Calculate overall risk score and determine inspection priority.
+        try:
+            vio_json = json.dumps([asdict(v) for v in violations])
+            raw = self.risk_chain.invoke({"violations": vio_json})
+            data = json.loads(raw)
+            return data["risk_score"], data["priority"]
 
-        Consider: severity levels, count, and category diversity.
-        """
+        except Exception as e:
+            print("Risk scoring error:", e)
+            return 0, "ROUTINE"
 
-        # TODO: Replace with real scoring logic
-        risk_score = min(100, len(violations) * 10)
-        priority = (
-            InspectionPriority.URGENT.value
-            if risk_score >= 70
-            else (
-                InspectionPriority.HIGH.value
-                if risk_score >= 40
-                else InspectionPriority.ROUTINE.value
-            )
-        )
-        return risk_score, priority
+    # ------------------------------------------------------------
 
-    def analyze_review(
-        self, text: str, restaurant_name: str = "Unknown"
-    ) -> InspectionReport:
-        """
-        TODO #4: Complete analysis pipeline for a single review.
-        """
+    def analyze_review(self, text: str, restaurant_name="Unknown") -> InspectionReport:
 
         violations = self.detect_violations(text)
         risk_score, priority = self.calculate_risk_score(violations)
-        recommendations: List[str] = []  # TODO: derive from violations
-        follow_up = risk_score >= 40
+
+        recommended_actions = [
+            f"Investigate: {v.category}" for v in violations
+        ]
 
         return InspectionReport(
             restaurant_name=restaurant_name,
             overall_risk_score=risk_score,
             violations=violations,
             inspection_priority=priority,
-            recommended_actions=recommendations,
-            follow_up_required=follow_up,
-        )
-
-    def batch_analyze(self, reviews: List[Dict[str, str]]) -> InspectionReport:
-        """
-        TODO #5: Analyze multiple reviews for the same restaurant.
-        """
-
-        all_violations: List[Violation] = []
-        for r in reviews:
-            all_violations.extend(self.detect_violations(r.get("text", "")))
-
-        risk_score, priority = self.calculate_risk_score(all_violations)
-
-        return InspectionReport(
-            restaurant_name="Unknown",
-            overall_risk_score=risk_score,
-            violations=all_violations,
-            inspection_priority=priority,
-            recommended_actions=[],
-            follow_up_required=risk_score >= 40,
+            recommended_actions=recommended_actions,
+            follow_up_required=(risk_score >= 40),
         )
 
 
-def _demo_reviews() -> List[Dict[str, str]]:
+# DEMO -----------------------------------------------------------
+
+def _demo_reviews():
     return [
         {
             "restaurant": "Bob's Burgers",
-            "text": "Great food but saw a mouse run across the dining room! Also, the chef wasn't wearing gloves while handling raw chicken.",
+            "text": "Great food but saw a mouse running inside! Chef touched raw chicken then served bread.",
         },
         {
             "restaurant": "Pizza Palace",
-            "text": "Bathroom had no soap, and meat sat on the counter unrefrigerated 😷",
+            "text": "The bathroom had no soap and meat was sitting unrefrigerated on the counter.",
         },
     ]
 
 
-def main() -> None:
-    print("🍽️ FOOD SAFETY INSPECTION SYSTEM — Assignment 2")
+def main():
+    print("🍽️ FOOD SAFETY INSPECTION SYSTEM — Assignment 2\n")
+
     insp = FoodSafetyInspector()
+
     for row in _demo_reviews():
         report = insp.analyze_review(row["text"], row["restaurant"])
-        print(json.dumps(asdict(report), indent=2, default=str))
+        print(json.dumps(asdict(report), indent=2))
 
 
 if __name__ == "__main__":
